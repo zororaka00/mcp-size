@@ -1,0 +1,37 @@
+{
+  "tools": [
+    {
+      "name": "search",
+      "title": "Search files",
+      "description": "Search a repository for text and return matching paths.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Text to search for." },
+          "path": { "type": "string", "description": "Optional directory to search." }
+        },
+        "required": ["query"]
+      },
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "create_issue",
+      "description": "Create an issue in a repository.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repository": { "type": "string" },
+          "title": { "type": "string" },
+          "body": { "type": "string" }
+        },
+        "required": ["repository", "title"]
+      },
+      "outputSchema": { "type": "object", "properties": { "id": { "type": "string" } } },
+      "annotations": { "destructiveHint": false }
+    },
+    {
+      "name": "health",
+      "description": "Return the current service health status."
+    }
+  ]
+}
