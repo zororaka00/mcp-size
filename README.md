@@ -197,4 +197,4 @@ Please keep changes small, deterministic, dependency-light, and covered by offli
 
 ## License
 
-MIT © mcp-size contributors
+MIT © Raka Widhi Antoro
