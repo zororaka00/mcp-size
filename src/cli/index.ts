@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { analyzeTools, fetchMcpTools, loadToolsFromJsonFile, type AnalysisResult, type McpFetchOptions, type MCPTool } from "../index.js";
 import { renderHumanReport, sortTools, type SortField } from "./reporter.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const SORT_FIELDS: SortField[] = ["tokens", "name", "description", "inputSchema", "outputSchema"];
 const VALUE_FLAGS = new Set([
   "--budget", "--top", "--sort", "--header", "--timeout-ms", "--max-response-bytes", "--max-tool-list-pages",

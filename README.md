@@ -4,9 +4,13 @@
 
 Measure how much context your MCP tool definitions consume before they reach the model.
 
+[Changelog](./CHANGELOG.md) · [Contributing](./CONTRIBUTING.md) · [MIT License](./LICENSE)
+
 ## What it does
 
 `mcp-size` reads local MCP tool JSON or asks an MCP server for `tools/list`, then reports estimated token overhead for tool names, titles, descriptions, JSON schemas, annotations, and other metadata. It is intentionally local, fast, and small enough to run in CI.
+
+Current release: **0.2.0**. Highlights since 0.1.0 include custom MCP HTTP headers / `MCP_SIZE_HEADERS`, protocol and client negotiation options, automatic `tools/list` pagination, and clearer 401/403 errors. See [CHANGELOG.md](./CHANGELOG.md) for the full list.
 
 ## Installation
 
@@ -186,6 +190,8 @@ The default tokenizer is deliberately an estimate. It is not tied to OpenAI, Ant
 
 ## Contributing
 
+Development is setup-light:
+
 ```bash
 npm install
 npm run typecheck
@@ -193,8 +199,14 @@ npm test
 npm run build
 ```
 
-Please keep changes small, deterministic, dependency-light, and covered by offline tests.
+Please keep changes small, deterministic, dependency-light, and covered by offline tests. Full guidelines for setup, pull requests, and issue reports are in [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Changelog
+
+Release history lives in [CHANGELOG.md](./CHANGELOG.md).
 
 ## License
 
-MIT © Raka Widhi Antoro
+MIT © Raka Widhi Antoro — see [LICENSE](./LICENSE).
+
+Repository: [github.com/zororaka00/mcp-size](https://github.com/zororaka00/mcp-size)

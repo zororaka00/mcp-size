@@ -1,6 +1,6 @@
 {
   "name": "mcp-size",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Bundle analyzer for MCP tools — measure MCP schema and context token overhead.",
   "type": "module",
   "engines": {
@@ -29,6 +29,23 @@
     "test:watch": "npm run build && tsc -p tsconfig.test.json && node --test --watch .test-dist/tests/*.test.js",
     "prepack": "npm run build"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zororaka00/mcp-size.git"
+  },
+  "homepage": "https://github.com/zororaka00/mcp-size/blob/main/README.md",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "bundle-analyzer",
+    "token-count",
+    "tool-schema",
+    "context-window",
+    "cli",
+    "llm",
+    "ai-tools",
+    "json-schema"
+  ],
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.10.0",
