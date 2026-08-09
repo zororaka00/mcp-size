@@ -78,3 +78,10 @@ test("finds large descriptions and schema property descriptions", () => {
   assert.ok(result.warnings.some((warning) => warning.includes("description")));
   assert.ok(result.suggestions.some((suggestion) => suggestion.includes("schema property description")));
 });
+
+test("merges thresholds and warns about duplicate names without deduplicating", () => {
+  const result = analyzeTools([{ name: "same" }, { name: "same" }], { thresholds: { dominantSharePercent: 101 } });
+  assert.equal(result.toolCount, 2);
+  assert.ok(result.warnings.some((warning) => warning.includes('Duplicate tool name "same"')));
+  assert.equal(result.warnings.some((warning) => warning.includes("accounts for 50.0%")), false);
+});

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fetchMcpTools, type McpFetchOptions } from "../src/sources/mcp.js";
 import { loadToolsFromJsonFile, parseToolsDocument } from "../src/sources/json.js";
+import { McpProtocolError, McpRequestError } from "../src/sources/mcp.js";
 
 test("loads a plain JSON array and an object with tools", () => {
   assert.equal(parseToolsDocument([{ name: "a" }], "fixture").length, 1);
@@ -32,7 +33,7 @@ test("fetches tools using initialize and official tools/list JSON-RPC methods", 
   const server = createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += String(chunk);
-    const message = JSON.parse(body) as { method: string };
+    const message = JSON.parse(body) as { method: string; params?: Record<string, unknown> };
     requests.push(message.method);
     if (message.method === "tools/list") {
       const sessionHeader = request.headers["mcp-session-id"];
@@ -45,7 +46,7 @@ test("fetches tools using initialize and official tools/list JSON-RPC methods", 
     } else if (message.method === "tools/list") {
       response.end(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "remote" }] } }));
     } else {
-      response.end(JSON.stringify({ jsonrpc: "2.0", result: {} }));
+      response.end();
     }
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -79,6 +80,8 @@ test("sends custom headers and configurable initialize negotiation and follows t
       response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-01-01", capabilities: {}, serverInfo: { name: "test", version: "0" } } }));
     } else if (message.method === "tools/list" && message.params?.cursor === undefined) {
       response.end(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "first" }], nextCursor: "page-2" } }));
+    } else if (message.method === "notifications/initialized") {
+      response.end();
     } else {
       response.end(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { tools: [{ name: "second" }] } }));
     }
@@ -112,11 +115,11 @@ test("rejects repeated cursors and page-limit overflows", async () => {
   const server = createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += String(chunk);
-    const message = JSON.parse(body) as { method: string };
+    const message = JSON.parse(body) as { method: string; params?: Record<string, unknown> };
     response.setHeader("content-type", "application/json");
-    if (message.method === "initialize") response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
-    else if (message.method === "tools/list") response.end(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "loop" }], nextCursor: "same" } }));
-    else response.end(JSON.stringify({ jsonrpc: "2.0", result: {} }));
+    if (message.method === "initialize") response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } }));
+    else if (message.method === "tools/list") response.end(JSON.stringify({ jsonrpc: "2.0", id: message.params?.cursor === undefined ? 2 : 3, result: { tools: [{ name: "loop" }], nextCursor: "same" } }));
+    else response.end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -145,15 +148,76 @@ test("reports actionable authentication and pagination response errors", async (
   const server = createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += String(chunk);
-    const message = JSON.parse(body) as { method: string };
+    const message = JSON.parse(body) as { method: string; params?: Record<string, unknown> };
     response.setHeader("content-type", "application/json");
-    if (message.method === "initialize") response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
+    if (message.method === "initialize") response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } }));
     else if (message.method === "tools/list") response.end(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [], nextCursor: 42 } }));
-    else response.end(JSON.stringify({ jsonrpc: "2.0", result: {} }));
+    else response.end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   await assert.rejects(fetchMcpTools(`http://127.0.0.1:${(address as import("node:net").AddressInfo).port}/mcp`), /nextCursor.*string/i);
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+});
+
+function fakeJson(value: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json", ...headers } });
+}
+
+test("validates negotiated protocol, IDs, malformed envelopes, and structured errors", async () => {
+  const seenVersions: string[] = [];
+  const injectedFetch: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { method: string; id?: number };
+    seenVersions.push(new Headers(init?.headers).get("mcp-protocol-version") ?? "");
+    if (body.method === "initialize") return fakeJson({ jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-01-01" } });
+    if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+    return fakeJson({ jsonrpc: "2.0", id: body.id, result: { tools: [{ name: "ok" }] } });
+  };
+  assert.deepEqual(await fetchMcpTools("https://example.invalid/mcp", { fetch: injectedFetch }), [{ name: "ok" }]);
+  assert.deepEqual(seenVersions, ["2025-06-18", "2025-01-01", "2025-01-01"]);
+  const malformed: typeof fetch = async (_url, init) => fakeJson({ jsonrpc: "1.0", id: (JSON.parse(String(init?.body)) as { id: number }).id, result: {} });
+  await assert.rejects(fetchMcpTools("https://example.invalid/mcp", { fetch: malformed }), McpProtocolError);
+  const mismatch: typeof fetch = async () => fakeJson({ jsonrpc: "2.0", id: 999, result: {} });
+  await assert.rejects(fetchMcpTools("https://example.invalid/mcp", { fetch: mismatch }), /mismatched id/i);
+  const serverError: typeof fetch = async (_url, init) => fakeJson({ jsonrpc: "2.0", id: (JSON.parse(String(init?.body)) as { id: number }).id, error: { code: -32001, message: "server unavailable" } });
+  await assert.rejects(fetchMcpTools("https://example.invalid/mcp", { fetch: serverError }), (error: unknown) => error instanceof McpRequestError && error.code === -32001);
+});
+
+test("enforces chunked per-response and aggregate pagination limits", async () => {
+  let call = 0;
+  const chunked: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { method: string; id?: number }; call += 1;
+    if (body.method === "initialize") return fakeJson({ jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-06-18" } });
+    if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode('{"jsonrpc":"2.0","id":2,"result":{"tools":[')); controller.enqueue(new TextEncoder().encode(`{"name":"${"x".repeat(100)}"}]}}`)); controller.close(); } });
+    return new Response(stream, { headers: { "content-type": "application/json" } });
+  };
+  await assert.rejects(fetchMcpTools("https://example.invalid/mcp", { fetch: chunked, maxResponseBytes: 80 }), /byte limit/i);
+  assert.equal(call, 3);
+  let page = 0;
+  const paged: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { method: string; id?: number };
+    if (body.method === "initialize") return fakeJson({ jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-06-18" } });
+    if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+    page += 1; return fakeJson({ jsonrpc: "2.0", id: body.id, result: { tools: [{ name: `p${page}` }], ...(page < 2 ? { nextCursor: "next" } : {}) } });
+  };
+  await assert.rejects(fetchMcpTools("https://example.invalid/mcp", { fetch: paged, maxTools: 1 }), /maximum of 1 tools/i);
+  await assert.rejects(fetchMcpTools("https://example.invalid/mcp", { fetch: paged, maxTotalResponseBytes: 1 }), /byte limit/i);
+});
+
+test("supports caller abort, injected retry, and non-secret diagnostics", async () => {
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(fetchMcpTools("https://example.invalid/mcp", { signal: controller.signal, fetch: async () => { throw new Error("should not run"); } }), /aborted/i);
+  let attempts = 0; const diagnostics: Array<{ event: string }> = [];
+  const retrying: typeof fetch = async (_url, init) => {
+    attempts += 1; const body = JSON.parse(String(init?.body)) as { method: string; id?: number };
+    if (attempts === 1) throw new TypeError("network");
+    if (body.method === "initialize") return fakeJson({ jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-06-18" } });
+    if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+    return fakeJson({ jsonrpc: "2.0", id: body.id, result: { tools: [] } });
+  };
+  await fetchMcpTools("https://example.invalid/mcp", { fetch: retrying, retries: 1, retryDelayMs: 0, onDiagnostic: (event) => diagnostics.push(event) });
+  assert.equal(attempts, 4); assert.ok(diagnostics.some((event) => event.event === "retry"));
+  assert.equal(JSON.stringify(diagnostics).includes("Authorization"), false);
 });

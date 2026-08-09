@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-09
+
+### Added
+
+- Streaming per-response and aggregate MCP byte limits, aggregate tool limits, and incremental `fetchMcpToolPages()`.
+- Strict JSON-RPC 2.0 validation, matching response IDs, initialize protocol negotiation, session preservation, and public `McpRequestError`/`McpProtocolError` classes.
+- Public abort signals, injectable fetch, safe opt-in retries with bounded backoff, diagnostics callbacks, and configurable analyzer thresholds.
+- Bounded local-file/stdin input, baseline/diff CLI checks, safe executable-plus-argument stdio support, duplicate-name warnings, and a reproducible benchmark script.
+
+### Changed
+
+- CLI and client version is now 0.3.0. Response and input limits are enforced while bytes are being read; limits fail before unbounded accumulation.
+- Authentication and error diagnostics continue to redact credentials and header values. Legacy GET-only SSE session setup remains intentionally unsupported.
+
+### Migration notes
+
+- MCP servers must return a valid `initialize` result with a supported `protocolVersion`; callers relying on empty or malformed initialize responses must fix the server.
+- Retry behavior is opt-in (`retries: 0` by default) and timeout is per attempt.
+
 ## [0.2.0] - 2026-08-09
 
 ### Added
@@ -30,5 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Local JSON sources and minimal MCP Streamable HTTP `tools/list` support with response limits.
 - Offline tests, example fixture, CI workflow, README, and MIT license.
 
+[0.3.0]: https://github.com/zororaka00/mcp-size/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/zororaka00/mcp-size/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/zororaka00/mcp-size/releases/tag/v0.1.0

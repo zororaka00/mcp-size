@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { fileURLToPath } from "node:url";
-import { analyzeTools, fetchMcpTools, loadToolsFromJsonFile, type AnalysisResult, type McpFetchOptions, type MCPTool } from "../index.js";
+import { readFile } from "node:fs/promises";
+import { analyzeTools, fetchMcpTools, fetchMcpToolsStdio, loadToolsFromJsonFile, type AnalysisResult, type McpFetchOptions, type MCPTool } from "../index.js";
 import { renderHumanReport, sortTools, type SortField } from "./reporter.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const SORT_FIELDS: SortField[] = ["tokens", "name", "description", "inputSchema", "outputSchema"];
 const VALUE_FLAGS = new Set([
   "--budget", "--top", "--sort", "--header", "--timeout-ms", "--max-response-bytes", "--max-tool-list-pages",
-  "--protocol-version", "--client-name", "--client-version", "--accept", "--content-type"
+  "--protocol-version", "--client-name", "--client-version", "--accept", "--content-type", "--max-total-response-bytes", "--max-tools", "--retries", "--retry-delay-ms", "--max-input-bytes", "--baseline", "--max-increase", "--stdio", "--stdio-arg"
 ]);
 
 interface CliOptions {
@@ -27,6 +28,15 @@ interface CliOptions {
   accept?: string;
   contentType?: string;
   maxToolListPages?: number;
+  maxTotalResponseBytes?: number;
+  maxTools?: number;
+  retries?: number;
+  retryDelayMs?: number;
+  maxInputBytes?: number;
+  baseline?: string;
+  maxIncrease?: number;
+  stdio?: string;
+  stdioArgs: string[];
   help: boolean;
   version: boolean;
 }
@@ -48,6 +58,20 @@ Options:
                       Maximum HTTP response size (default: 10485760)
   --max-tool-list-pages <number>
                       Maximum tools/list pages (default: 100)
+  --max-total-response-bytes <bytes>
+                      Maximum aggregate HTTP response bytes (default: 52428800)
+  --max-tools <number> Maximum aggregate MCP tools (default: 10000)
+  --retries <number>  Opt-in retries (timeout/network/408/429/5xx; default: 0)
+  --retry-delay-ms <ms>
+                      Retry backoff base (timeout is per attempt)
+  --max-input-bytes <bytes>
+                      Maximum local JSON/stdin input (default: 10485760)
+  --baseline <file>   Compare total and per-tool tokens with a JSON report
+  --max-increase <tokens>
+                      Allowed baseline increase before exit 1 (default: 0)
+  --stdio <executable>
+                      Run an MCP stdio executable without a shell
+  --stdio-arg <arg>   Append one argument to --stdio; repeat as needed
   --protocol-version <version>
                       MCP protocol version (default: 2025-06-18)
   --client-name <name>
@@ -98,6 +122,15 @@ function setValue(options: CliOptions, flag: string, value: string): void {
   else if (flag === "--timeout-ms") options.timeoutMs = positiveInteger(value, flag);
   else if (flag === "--max-response-bytes") options.maxResponseBytes = positiveInteger(value, flag);
   else if (flag === "--max-tool-list-pages") options.maxToolListPages = positiveInteger(value, flag);
+  else if (flag === "--max-total-response-bytes") options.maxTotalResponseBytes = positiveInteger(value, flag);
+  else if (flag === "--max-tools") options.maxTools = positiveInteger(value, flag);
+  else if (flag === "--retries") options.retries = positiveInteger(value, flag, true);
+  else if (flag === "--retry-delay-ms") options.retryDelayMs = positiveInteger(value, flag, true);
+  else if (flag === "--max-input-bytes") options.maxInputBytes = positiveInteger(value, flag);
+  else if (flag === "--baseline") options.baseline = value;
+  else if (flag === "--max-increase") options.maxIncrease = positiveInteger(value, flag, true);
+  else if (flag === "--stdio") options.stdio = value;
+  else if (flag === "--stdio-arg") options.stdioArgs.push(value);
   else if (flag === "--protocol-version") options.protocolVersion = textValue(value, flag);
   else if (flag === "--client-name") options.clientName = textValue(value, flag);
   else if (flag === "--client-version") options.clientVersion = textValue(value, flag);
@@ -106,7 +139,7 @@ function setValue(options: CliOptions, flag: string, value: string): void {
 }
 
 function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { json: false, sort: "tokens", noColor: false, verbose: false, headers: [], help: false, version: false };
+  const options: CliOptions = { json: false, sort: "tokens", noColor: false, verbose: false, headers: [], stdioArgs: [], help: false, version: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") options.help = true;
@@ -125,11 +158,12 @@ function parseArgs(argv: string[]): CliOptions {
         const value = arg.slice(separator + 1);
         if (!value) throw new Error(`${flag} requires a value.`);
         setValue(options, flag, value);
-      } else if (arg.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
+      } else if (arg.startsWith("-") && arg !== "-") throw new Error(`Unknown option: ${arg}`);
       else if (options.source === undefined) options.source = arg;
       else throw new Error("Only one source may be provided.");
     }
   }
+  if (options.stdio && options.source) throw new Error("Use either a JSON/HTTP source or --stdio, not both.");
   return options;
 }
 
@@ -140,6 +174,7 @@ function environmentHeaders(): Array<[string, string]> {
 }
 
 async function loadSource(source: string, options: CliOptions): Promise<MCPTool[]> {
+  if (options.stdio) return fetchMcpToolsStdio(options.stdio, options.stdioArgs, { timeoutMs: options.timeoutMs, maxResponseBytes: options.maxResponseBytes, maxTotalResponseBytes: options.maxTotalResponseBytes, maxTools: options.maxTools, protocolVersion: options.protocolVersion, clientInfo: options.clientName || options.clientVersion ? { name: options.clientName ?? VERSION, version: options.clientVersion ?? VERSION } : undefined, retries: options.retries, retryDelayMs: options.retryDelayMs });
   if (source.startsWith("http://") || source.startsWith("https://")) {
     const mcpOptions: McpFetchOptions = {
       headers: [...environmentHeaders(), ...options.headers],
@@ -150,10 +185,24 @@ async function loadSource(source: string, options: CliOptions): Promise<MCPTool[
       accept: options.accept,
       contentType: options.contentType,
       maxToolListPages: options.maxToolListPages
+      ,maxTotalResponseBytes: options.maxTotalResponseBytes, maxTools: options.maxTools, retries: options.retries, retryDelayMs: options.retryDelayMs
     };
     return fetchMcpTools(source, mcpOptions);
   }
-  return loadToolsFromJsonFile(source);
+  return loadToolsFromJsonFile(source, { maxInputBytes: options.maxInputBytes });
+}
+
+async function baselineOverage(path: string | undefined, result: AnalysisResult, allowed: number): Promise<{ totalOver: number; tools: string[] }> {
+  if (!path) return { totalOver: 0, tools: [] };
+  let baseline: unknown;
+  try { baseline = JSON.parse(await readFile(path, "utf8")); } catch { throw new Error(`Unable to read baseline JSON from ${path}.`); }
+  if (typeof baseline !== "object" || baseline === null || typeof (baseline as Record<string, unknown>).totalTokens !== "number") throw new Error(`Baseline ${path} must be a mcp-size JSON report.`);
+  const totalOver = Math.max(0, result.totalTokens - (baseline as { totalTokens: number }).totalTokens - allowed);
+  const previous = new Map<string, number>();
+  const rawTools = (baseline as Record<string, unknown>).tools;
+  if (Array.isArray(rawTools)) for (const tool of rawTools) if (typeof tool === "object" && tool !== null && typeof (tool as Record<string, unknown>).name === "string" && typeof (tool as Record<string, unknown>).tokens === "number") previous.set((tool as { name: string }).name, (tool as { tokens: number }).tokens);
+  const tools = result.tools.filter((tool) => tool.tokens - (previous.get(tool.name) ?? 0) > allowed).map((tool) => `${tool.name} increased by ${tool.tokens - (previous.get(tool.name) ?? 0)} tokens`);
+  return { totalOver, tools };
 }
 
 function jsonReport(result: AnalysisResult, displayedTools: AnalysisResult["tools"], source: string, budget: number | undefined): string {
@@ -179,13 +228,16 @@ export async function runCli(argv: string[]): Promise<number> {
     process.stdout.write(`${VERSION}\n`);
     return 0;
   }
-  if (!options.source) throw new Error("A JSON file path or HTTP(S) MCP server URL is required. Use --help for usage.");
-  const tools = await loadSource(options.source, options);
+  if (!options.source && !options.stdio) throw new Error("A JSON file path, HTTP(S) MCP server URL, or --stdio executable is required. Use --help for usage.");
+  const source = options.source ?? `stdio:${options.stdio}`;
+  const tools = await loadSource(source, options);
   const result = analyzeTools(tools);
   const displayedTools = sortTools(result.tools, options.sort).slice(0, options.top);
-  const exceeded = options.budget !== undefined && result.totalTokens > options.budget;
-  if (options.json) process.stdout.write(`${jsonReport(result, displayedTools, options.source, options.budget)}\n`);
-  else process.stdout.write(renderHumanReport(result, { source: options.source, tools: displayedTools, budget: options.budget }));
+  const baseline = await baselineOverage(options.baseline, result, options.maxIncrease ?? 0);
+  const exceeded = (options.budget !== undefined && result.totalTokens > options.budget) || baseline.totalOver > 0 || baseline.tools.length > 0;
+  if (options.json) process.stdout.write(`${JSON.stringify({ ...JSON.parse(jsonReport(result, displayedTools, source, options.budget)), baseline })}\n`);
+  else process.stdout.write(renderHumanReport(result, { source, tools: displayedTools, budget: options.budget }));
+  if (exceeded && (baseline.totalOver > 0 || baseline.tools.length > 0) && !options.json) process.stderr.write(`Baseline regression: ${baseline.totalOver > 0 ? `${baseline.totalOver} total tokens over allowance` : ""}${baseline.tools.length ? `; ${baseline.tools.join("; ")}` : ""}.\n`);
   return exceeded ? 1 : 0;
 }
 

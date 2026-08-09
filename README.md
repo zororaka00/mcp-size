@@ -10,7 +10,7 @@ Measure how much context your MCP tool definitions consume before they reach the
 
 `mcp-size` reads local MCP tool JSON or asks an MCP server for `tools/list`, then reports estimated token overhead for tool names, titles, descriptions, JSON schemas, annotations, and other metadata. It is intentionally local, fast, and small enough to run in CI.
 
-Current release: **0.2.0**. Highlights since 0.1.0 include custom MCP HTTP headers / `MCP_SIZE_HEADERS`, protocol and client negotiation options, automatic `tools/list` pagination, and clearer 401/403 errors. See [CHANGELOG.md](./CHANGELOG.md) for the full list.
+Current release: **0.3.0**. Highlights include bounded streaming and aggregate MCP responses, negotiated protocol validation, typed errors, opt-in retries, stdin/stdio inputs, baseline checks, and configurable analyzer thresholds. See [CHANGELOG.md](./CHANGELOG.md) for the full list.
 
 ## Installation
 
@@ -81,6 +81,13 @@ Options:
 - `--timeout-ms <milliseconds>` sets the request timeout; the default is `15000`.
 - `--max-response-bytes <bytes>` sets the response-size limit; the default is `10485760` (10 MiB).
 - `--max-tool-list-pages <number>` sets the pagination safety limit; the default is `100`.
+- `--max-total-response-bytes <bytes>` limits bytes accumulated across all MCP responses; the default is `52428800`.
+- `--max-tools <number>` limits aggregate MCP tools; the default is `10000`.
+- `--retries <number>` enables bounded retries for network errors, timeouts, HTTP 408/429/5xx; default `0`.
+- `--retry-delay-ms <milliseconds>` sets exponential backoff base. Timeout is per attempt and `Retry-After` is honored up to one minute when parseable.
+- `--max-input-bytes <bytes>` bounds local JSON files and `-` stdin; the default is `10485760`.
+- `--baseline <file>` compares total and per-tool token counts with a prior `--json` report; `--max-increase` sets the allowed increase and regressions exit `1`.
+- `--stdio <executable> --stdio-arg <argument>` runs an MCP executable with an argument array, without shell interpolation.
 - `--protocol-version <version>` overrides the MCP protocol version sent in `initialize` and `MCP-Protocol-Version` (default `2025-06-18`).
 - `--client-name <name>` and `--client-version <version>` override the client information sent in `initialize`.
 - `--accept <media-types>` overrides `Accept`; the default is `application/json, text/event-stream`, the Streamable HTTP negotiation default.
@@ -112,13 +119,17 @@ Both of these formats are accepted:
 {"tools":[{"name":"search","description":"Search files","inputSchema":{"type":"object"}}]}
 ```
 
+Thresholds can be overridden without changing defaults for unspecified fields: `analyzeTools(tools, { thresholds: { largeToolTokens: 2000, dominantSharePercent: 30 } })`. The merge is deterministic. Duplicate tool names are never deduplicated; a warning identifies each repeated name.
+
+For a provider tokenizer, implement the small adapter `{ count(text) { return provider.encode(text).length; } }` and pass it as `tokenizer`. Keep that provider in your application rather than adding it as a runtime dependency of `mcp-size`.
+
 Tool names must be non-empty strings. Known string fields and JSON object schemas are validated with concise errors.
 
 ### MCP servers
 
-HTTP(S) URLs use the MCP JSON-RPC behavior: `initialize`, `notifications/initialized`, then `tools/list`. The client supports MCP Streamable HTTP-style POST requests and JSON or server-sent-event responses, preserves the `MCP-Session-Id`, and follows `nextCursor` until all pages are collected. Tools remain in server order; server-supplied duplicates are retained. A repeated cursor or more than 100 pages fails with an actionable error rather than looping forever. Use `--max-tool-list-pages` (or `maxToolListPages` in the library) to choose another positive safety limit.
+HTTP(S) URLs use the MCP JSON-RPC behavior: `initialize`, `notifications/initialized`, then `tools/list`. The client supports MCP Streamable HTTP-style POST requests and JSON or server-sent-event responses, preserves the `MCP-Session-Id`, validates JSON-RPC 2.0 envelopes and matching IDs, and uses the server's negotiated protocol version on subsequent requests. It follows `nextCursor` until all pages are collected. Tools remain in server order; server-supplied duplicates are retained and reported by the analyzer. A repeated cursor, page, byte, tool, or total-response limit fails with an actionable typed error. Legacy GET-only SSE session setup and arbitrary custom transports are intentionally not implemented; use a Streamable HTTP endpoint or stdio.
 
-Custom headers are passed on every MCP request, so the same generic option covers Authorization Bearer, API keys, Basic auth, tenant headers, and vendor-specific headers. HTTP 401 and 403 errors identify the authentication/authorization problem without echoing credentials; a safe authentication challenge scheme may be included. This is not an OAuth/browser-login client and does not provide a provider-specific authentication framework. It also does not implement stdio, legacy SSE-only session setup, or custom transports.
+Custom headers are passed on every MCP request, so the same generic option covers Authorization Bearer, API keys, Basic auth, tenant headers, and vendor-specific headers. HTTP 401 and 403 errors identify the authentication/authorization problem without echoing credentials; a safe authentication challenge scheme may be included. This is not an OAuth/browser-login client and does not provide a provider-specific authentication framework. The explicit stdio API/CLI is safe and uses an executable plus argument array; legacy GET-only SSE session setup and custom transports are not implemented.
 
 ## Library API
 
@@ -148,11 +159,13 @@ const tools = await fetchMcpTools("https://example.invalid/mcp", {
   capabilities: {},
   timeoutMs: 15000,
   maxResponseBytes: 10 * 1024 * 1024,
+  maxTotalResponseBytes: 50 * 1024 * 1024,
+  maxTools: 10_000,
   maxToolListPages: 100
 });
 ```
 
-`headers` accepts standard `HeadersInit`, allowing repeated entries when needed. `fetchMcpToolsWithMetadata` additionally returns `pagination.pageCount`, followed cursors, and the negotiated session ID. The default `Accept` and `Content-Type` values can be overridden with `accept` and `contentType` when a server requires different content negotiation.
+`headers` accepts standard `HeadersInit`, allowing repeated entries when needed. `McpFetchOptions` also accepts a caller `signal`, injectable `fetch`, opt-in `retries`/`retryDelayMs`, and `onDiagnostic`. Diagnostics contain only method, request ID, page, status, byte, attempt, and timing fields; credentials and header values are never exposed. `fetchMcpToolPages()` yields validated pages incrementally, while `fetchMcpTools()` remains the order-preserving aggregate API. `fetchMcpToolsWithMetadata` additionally returns pagination metadata and the negotiated session ID.
 
 A custom tokenizer can be supplied when you need a model- or application-specific estimate:
 

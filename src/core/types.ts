@@ -54,6 +54,7 @@ export interface AnalysisResult {
 
 export interface AnalyzeOptions {
   tokenizer?: Tokenizer;
+  thresholds?: Partial<Record<keyof typeof DEFAULT_THRESHOLDS, number>>;
 }
 
 export const DEFAULT_THRESHOLDS = Object.freeze({

@@ -23,20 +23,20 @@ function countJson(value: unknown, tokenizer: AnalyzeOptions["tokenizer"], label
   return assertTokenCount((tokenizer ?? defaultTokenizer).count(stableStringify(value)), label);
 }
 
-function countLongDescriptions(value: unknown, tokenizer: AnalyzeOptions["tokenizer"], seen = new Set<object>()): number {
+function countLongDescriptions(value: unknown, tokenizer: AnalyzeOptions["tokenizer"], limit: number, seen = new Set<object>()): number {
   if (typeof value !== "object" || value === null) return 0;
   if (seen.has(value)) return 0;
   seen.add(value);
   let count = 0;
   if (Array.isArray(value)) {
-    for (const child of value) count += countLongDescriptions(child, tokenizer, seen);
+    for (const child of value) count += countLongDescriptions(child, tokenizer, limit, seen);
     return count;
   }
   const record = value as Record<string, unknown>;
-  if (typeof record.description === "string" && countText(record.description, tokenizer, "schema description") > DEFAULT_THRESHOLDS.longPropertyDescriptionTokens) {
+  if (typeof record.description === "string" && countText(record.description, tokenizer, "schema description") > limit) {
     count += 1;
   }
-  for (const child of Object.values(record)) count += countLongDescriptions(child, tokenizer, seen);
+  for (const child of Object.values(record)) count += countLongDescriptions(child, tokenizer, limit, seen);
   return count;
 }
 
@@ -79,17 +79,18 @@ function percentages(breakdown: AnalysisBreakdown, totalTokens: number): Analysi
 }
 
 export function analyzeTools(tools: MCPTool[], options: AnalyzeOptions = {}): AnalysisResult {
+  const thresholds = { ...DEFAULT_THRESHOLDS, ...(options.thresholds ?? {}) };
   const validTools = validateTools(tools, "tools");
   const analyzed: ToolAnalysis[] = validTools.map((tool) => {
     const breakdown = breakdownFor(tool, options.tokenizer);
     const tokens = Object.values(breakdown).reduce((total, value) => total + value, 0);
     const warnings: string[] = [];
     const suggestions: string[] = [];
-    if (tokens > DEFAULT_THRESHOLDS.largeToolTokens) warnings.push(`${tool.name} is a large tool: ${tokens} estimated tokens.`);
-    if (breakdown.description > DEFAULT_THRESHOLDS.largeDescriptionTokens) warnings.push(`${tool.name} has a large description: ${breakdown.description} estimated tokens.`);
-    if (breakdown.inputSchema > DEFAULT_THRESHOLDS.largeInputSchemaTokens) warnings.push(`${tool.name} has a large input schema: ${breakdown.inputSchema} estimated tokens.`);
-    const longDescriptions = countLongDescriptions(tool.inputSchema, options.tokenizer) + countLongDescriptions(tool.outputSchema, options.tokenizer);
-    if (longDescriptions > 0) suggestions.push(`${tool.name} has ${longDescriptions} schema property description${longDescriptions === 1 ? "" : "s"} over ${DEFAULT_THRESHOLDS.longPropertyDescriptionTokens} estimated tokens.`);
+    if (tokens > thresholds.largeToolTokens) warnings.push(`${tool.name} is a large tool: ${tokens} estimated tokens.`);
+    if (breakdown.description > thresholds.largeDescriptionTokens) warnings.push(`${tool.name} has a large description: ${breakdown.description} estimated tokens.`);
+    if (breakdown.inputSchema > thresholds.largeInputSchemaTokens) warnings.push(`${tool.name} has a large input schema: ${breakdown.inputSchema} estimated tokens.`);
+    const longDescriptions = countLongDescriptions(tool.inputSchema, options.tokenizer, thresholds.longPropertyDescriptionTokens) + countLongDescriptions(tool.outputSchema, options.tokenizer, thresholds.longPropertyDescriptionTokens);
+    if (longDescriptions > 0) suggestions.push(`${tool.name} has ${longDescriptions} schema property description${longDescriptions === 1 ? "" : "s"} over ${thresholds.longPropertyDescriptionTokens} estimated tokens.`);
     return { name: tool.name, tokens, percentage: 0, breakdown, warnings, suggestions };
   });
   analyzed.sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name));
@@ -98,16 +99,23 @@ export function analyzeTools(tools: MCPTool[], options: AnalyzeOptions = {}): An
   const warnings = analyzed.flatMap((tool) => tool.warnings);
   const suggestions = analyzed.flatMap((tool) => tool.suggestions);
   for (const tool of analyzed) {
-    if (tool.percentage > DEFAULT_THRESHOLDS.dominantSharePercent) {
+    if (tool.percentage > thresholds.dominantSharePercent) {
       warnings.push(`${tool.name} accounts for ${tool.percentage.toFixed(1)}% of the MCP context.`);
     }
   }
-  const concentration = analyzed.slice(0, DEFAULT_THRESHOLDS.concentrationToolLimit);
+  const concentration = analyzed.slice(0, thresholds.concentrationToolLimit);
   const concentrationTokens = concentration.reduce((sum, tool) => sum + tool.tokens, 0);
-  if (analyzed.length > DEFAULT_THRESHOLDS.concentrationToolLimit && totalTokens > 0 && (concentrationTokens / totalTokens) * 100 >= DEFAULT_THRESHOLDS.concentrationSharePercent) {
+  if (analyzed.length > thresholds.concentrationToolLimit && totalTokens > 0 && (concentrationTokens / totalTokens) * 100 >= thresholds.concentrationSharePercent) {
     warnings.push(`${concentration.length} tools account for ${((concentrationTokens / totalTokens) * 100).toFixed(1)}% of the MCP context.`);
   }
   const breakdown = sumBreakdowns(analyzed);
+  const duplicateNames = new Set<string>();
+  const seenNames = new Set<string>();
+  for (const tool of validTools) {
+    if (seenNames.has(tool.name)) duplicateNames.add(tool.name);
+    seenNames.add(tool.name);
+  }
+  for (const name of Array.from(duplicateNames)) warnings.push(`Duplicate tool name "${name}" was retained in server order.`);
   return {
     toolCount: analyzed.length,
     totalTokens,

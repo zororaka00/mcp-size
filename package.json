@@ -1,6 +1,6 @@
 {
   "name": "mcp-size",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Bundle analyzer for MCP tools — measure MCP schema and context token overhead.",
   "type": "module",
   "engines": {
@@ -20,10 +20,13 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "benchmark": "node scripts/benchmark.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/tests/*.test.js",
     "test:watch": "npm run build && tsc -p tsconfig.test.json && node --test --watch .test-dist/tests/*.test.js",

@@ -28,6 +28,22 @@ test("CLI emits human and JSON reports and honors budget exit code", async () =>
   await rm(directory, { recursive: true, force: true });
 });
 
+test("CLI accepts - as stdin with options after the source", () => {
+  const input = JSON.stringify([{ name: "stdin-tool", description: "from stdin" }]);
+  const plain = spawnSync(process.execPath, [cli, "-"], { input, encoding: "utf8" });
+  assert.equal(plain.status, 0);
+  assert.match(plain.stdout, /Source:\s+-/);
+
+  const json = spawnSync(process.execPath, [cli, "-", "--json"], { input, encoding: "utf8" });
+  assert.equal(json.status, 0);
+  assert.equal(json.stderr, "");
+  assert.equal((JSON.parse(json.stdout) as { toolCount: number }).toolCount, 1);
+
+  const bounded = spawnSync(process.execPath, [cli, "-", "--max-input-bytes", "1048576"], { input, encoding: "utf8" });
+  assert.equal(bounded.status, 0);
+  assert.match(bounded.stdout, /Source:\s+-/);
+});
+
 test("CLI uses exit code 2 for invalid input", () => {
   const result = spawnSync(process.execPath, [cli, "missing-tools.json"], { encoding: "utf8" });
   assert.equal(result.status, 2);
@@ -50,9 +66,9 @@ test("CLI forwards custom headers without printing their values", async () => {
     for await (const chunk of request) body += String(chunk);
     const message = JSON.parse(body) as { method: string };
     response.setHeader("content-type", "application/json");
-    if (message.method === "initialize") response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
+    if (message.method === "initialize") response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } }));
     else if (message.method === "tools/list") response.end(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "remote" }] } }));
-    else response.end(JSON.stringify({ jsonrpc: "2.0", result: {} }));
+    else response.end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
