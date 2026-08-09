@@ -11,7 +11,7 @@ import {
   validateTools
 } from "./types.js";
 
-const KNOWN_FIELDS = new Set(["name", "title", "description", "inputSchema", "outputSchema"]);
+const KNOWN_FIELDS = new Set(["name", "title", "description", "inputSchema", "outputSchema", "annotations", "metadata"]);
 
 function countText(text: string | undefined, tokenizer: AnalyzeOptions["tokenizer"], label: string): number {
   if (text === undefined) return 0;
@@ -45,13 +45,17 @@ function breakdownFor(tool: MCPTool, tokenizer: AnalyzeOptions["tokenizer"]): To
   for (const [key, value] of Object.entries(tool)) {
     if (!KNOWN_FIELDS.has(key)) metadata[key] = value;
   }
+  const metadataValue = tool.metadata === undefined
+    ? metadata
+    : Object.keys(metadata).length === 0 ? tool.metadata : { ...metadata, metadata: tool.metadata };
   return {
     name: countText(tool.name, tokenizer, `${tool.name}.name`),
     title: countText(tool.title, tokenizer, `${tool.name}.title`),
     description: countText(tool.description, tokenizer, `${tool.name}.description`),
     inputSchema: countJson(tool.inputSchema, tokenizer, `${tool.name}.inputSchema`),
     outputSchema: countJson(tool.outputSchema, tokenizer, `${tool.name}.outputSchema`),
-    metadata: Object.keys(metadata).length === 0 ? 0 : countJson(metadata, tokenizer, `${tool.name}.metadata`)
+    annotations: countJson(tool.annotations, tokenizer, `${tool.name}.annotations`),
+    metadata: Object.keys(metadata).length === 0 && tool.metadata === undefined ? 0 : countJson(metadataValue, tokenizer, `${tool.name}.metadata`)
   };
 }
 
@@ -62,8 +66,9 @@ function sumBreakdowns(items: ToolAnalysis[]): AnalysisBreakdown {
     descriptions: sum.descriptions + item.breakdown.description,
     inputSchemas: sum.inputSchemas + item.breakdown.inputSchema,
     outputSchemas: sum.outputSchemas + item.breakdown.outputSchema,
+    annotations: sum.annotations + item.breakdown.annotations,
     metadata: sum.metadata + item.breakdown.metadata
-  }), { names: 0, titles: 0, descriptions: 0, inputSchemas: 0, outputSchemas: 0, metadata: 0 });
+  }), { names: 0, titles: 0, descriptions: 0, inputSchemas: 0, outputSchemas: 0, annotations: 0, metadata: 0 });
 }
 
 function percentages(breakdown: AnalysisBreakdown, totalTokens: number): AnalysisBreakdown {
@@ -74,6 +79,7 @@ function percentages(breakdown: AnalysisBreakdown, totalTokens: number): Analysi
     descriptions: share(breakdown.descriptions),
     inputSchemas: share(breakdown.inputSchemas),
     outputSchemas: share(breakdown.outputSchemas),
+    annotations: share(breakdown.annotations),
     metadata: share(breakdown.metadata)
   };
 }
@@ -89,6 +95,7 @@ export function analyzeTools(tools: MCPTool[], options: AnalyzeOptions = {}): An
     if (tokens > thresholds.largeToolTokens) warnings.push(`${tool.name} is a large tool: ${tokens} estimated tokens.`);
     if (breakdown.description > thresholds.largeDescriptionTokens) warnings.push(`${tool.name} has a large description: ${breakdown.description} estimated tokens.`);
     if (breakdown.inputSchema > thresholds.largeInputSchemaTokens) warnings.push(`${tool.name} has a large input schema: ${breakdown.inputSchema} estimated tokens.`);
+    if (breakdown.outputSchema > thresholds.largeOutputSchemaTokens) warnings.push(`${tool.name} has a large output schema: ${breakdown.outputSchema} estimated tokens.`);
     const longDescriptions = countLongDescriptions(tool.inputSchema, options.tokenizer, thresholds.longPropertyDescriptionTokens) + countLongDescriptions(tool.outputSchema, options.tokenizer, thresholds.longPropertyDescriptionTokens);
     if (longDescriptions > 0) suggestions.push(`${tool.name} has ${longDescriptions} schema property description${longDescriptions === 1 ? "" : "s"} over ${thresholds.longPropertyDescriptionTokens} estimated tokens.`);
     return { name: tool.name, tokens, percentage: 0, breakdown, warnings, suggestions };

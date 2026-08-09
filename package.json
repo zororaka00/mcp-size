@@ -1,6 +1,6 @@
 {
   "name": "mcp-size",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Bundle analyzer for MCP tools — measure MCP schema and context token overhead.",
   "type": "module",
   "engines": {

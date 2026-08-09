@@ -10,7 +10,7 @@ Measure how much context your MCP tool definitions consume before they reach the
 
 `mcp-size` reads local MCP tool JSON or asks an MCP server for `tools/list`, then reports estimated token overhead for tool names, titles, descriptions, JSON schemas, annotations, and other metadata. It is intentionally local, fast, and small enough to run in CI.
 
-Current release: **0.3.0**. Highlights include bounded streaming and aggregate MCP responses, negotiated protocol validation, typed errors, opt-in retries, stdin/stdio inputs, baseline checks, and configurable analyzer thresholds. See [CHANGELOG.md](./CHANGELOG.md) for the full list.
+Current release: **0.4.0**. The product scope is intentionally small: **Analyze → Explain → Compare → Enforce** MCP context budgets. Highlights include structured component breakdowns, deterministic warnings, `diff` reports, baseline checks, and CI-friendly exit codes. See [CHANGELOG.md](./CHANGELOG.md) for the full list.
 
 ## Installation
 
@@ -53,7 +53,8 @@ Titles                       0    0.0%
 Descriptions                43   38.1%
 Input schemas               42   37.2%
 Output schemas               0    0.0%
-Other metadata              12   10.6%
+Annotations                  4    3.5%
+Other metadata               8    7.1%
 ```
 
 The numbers are illustrative; run the command to inspect the fixture with the installed version.
@@ -67,6 +68,7 @@ mcp-size ./tools.json --top 5
 mcp-size ./tools.json --sort inputSchema
 mcp-size ./tools.json --json
 mcp-size ./tools.json --budget 5000
+mcp-size diff ./tools.json --baseline ./baseline-report.json --json
 mcp-size http://localhost:3000/mcp --no-color
 mcp-size https://example.invalid/mcp --header "Authorization: Bearer ${MCP_TOKEN}"
 ```
@@ -87,6 +89,8 @@ Options:
 - `--retry-delay-ms <milliseconds>` sets exponential backoff base. Timeout is per attempt and `Retry-After` is honored up to one minute when parseable.
 - `--max-input-bytes <bytes>` bounds local JSON files and `-` stdin; the default is `10485760`.
 - `--baseline <file>` compares total and per-tool token counts with a prior `--json` report; `--max-increase` sets the allowed increase and regressions exit `1`.
+- `mcp-size diff <current> --baseline <file>` compares added, removed, and modified tools, total tokens, per-tool deltas, and name/description/inputSchema/outputSchema/annotations/metadata deltas. `mcp-size diff <baseline> <current>` is also accepted.
+- On `diff`, `--max-increase <tokens>` enforces total, per-tool, and component increases. Without `--max-increase` or `--budget`, diff is report-only; `--budget` enforces the current total.
 - `--stdio <executable> --stdio-arg <argument>` runs an MCP executable with an argument array, without shell interpolation.
 - `--protocol-version <version>` overrides the MCP protocol version sent in `initialize` and `MCP-Protocol-Version` (default `2025-06-18`).
 - `--client-name <name>` and `--client-version <version>` override the client information sent in `initialize`.
@@ -105,7 +109,7 @@ MCP_SIZE_HEADERS=$'Authorization: Bearer '"$MCP_TOKEN"$'\nX-Tenant: '"$MCP_TENAN
 
 Shell history and process listings can expose values passed to `--header`; do not use that form for long-lived or sensitive credentials. `mcp-size` does not print configured header values in normal or verbose output.
 
-Exit codes are `0` for success or an in-budget report, `1` for a budget overrun, and `2` for invalid input or runtime errors.
+Exit codes are `0` for success or an in-budget report, `1` for a budget/regression overrun, and `2` for invalid input or runtime errors. `--json` and `diff --json` emit one deterministic machine-readable document on stdout; errors are written to stderr.
 
 ### JSON sources
 
@@ -195,11 +199,20 @@ Fail a job when tool metadata exceeds a context budget:
 
 The JSON output includes `totalTokens`, `toolCount`, `tools`, `breakdown`, `warnings`, `suggestions`, `budgetExceeded`, and `budgetOver`.
 
+Compare a checked-in report in CI:
+
+```yaml
+- name: Enforce MCP context budget
+  run: npx mcp-size diff ./tools.json --baseline ./baseline-report.json --max-increase 50 --budget 5000 --json
+```
+
+Commit `baseline-report.json` from a known-good tool definition set. Keep the JSON output as an artifact when diagnosing a failed check.
+
 ## Methodology and limitations
 
-Schemas and metadata are serialized as compact JSON with recursively sorted object keys. This makes counts reproducible regardless of input object key insertion order and avoids inflating estimates with pretty-print whitespace. Names, titles, and descriptions are counted as text; `annotations` and all other unknown fields are counted as compact metadata. Missing optional fields safely contribute zero tokens.
+Schemas, annotations, and metadata are serialized as compact JSON with recursively sorted object keys. This makes counts reproducible regardless of input object key insertion order and avoids inflating estimates with pretty-print whitespace. Names, titles, and descriptions are counted as text; annotations and metadata are separate breakdown components. Missing optional fields safely contribute zero tokens.
 
-The default tokenizer is deliberately an estimate. It is not tied to OpenAI, Anthropic, or any other model and must not be treated as a billing meter. The analyzer does not rewrite schemas, predict model quality, contact an LLM, or infer whether a tool is useful. Warnings use fixed structural thresholds: large tools over 1,000 estimated tokens, descriptions over 300, input schemas over 500, a tool share over 20%, and schema property descriptions over 50.
+The default tokenizer is deliberately an estimate. It is not tied to OpenAI, Anthropic, or any other model and must not be treated as an exact billing or model-token meter. The analyzer does not rewrite schemas, predict model quality, contact an LLM, or infer whether a tool is useful. Warnings use fixed structural thresholds: large tools over 1,000 estimated tokens, descriptions over 300, input/output schemas over 500, and a tool share over 20%. Schema property descriptions over 50 produce actionable suggestions. Thresholds are configurable through `analyzeTools`.
 
 ## Contributing
 

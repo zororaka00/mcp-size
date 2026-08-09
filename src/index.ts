@@ -1,6 +1,7 @@
 export { analyzeTools } from "./core/analyzer.js";
 export { defaultTokenizer, stableStringify } from "./core/tokenizer.js";
 export { DEFAULT_THRESHOLDS, validateTools } from "./core/types.js";
+export { compareAnalyses, parseBaselineDocument, DIFF_COMPONENTS } from "./core/diff.js";
 export type {
   AnalyzeOptions,
   AnalysisBreakdown,
@@ -11,6 +12,7 @@ export type {
   ToolAnalysis,
   ToolBreakdown
 } from "./core/types.js";
+export type { AnalysisDiff, DiffComponent, DiffEnforcement, DiffMetric, DiffOptions, ToolDiff } from "./core/diff.js";
 export { loadToolsFromJsonFile, parseToolsDocument } from "./sources/json.js";
 export type { JsonInputOptions } from "./sources/json.js";
 export { fetchMcpTools, fetchMcpToolsWithMetadata, fetchMcpToolPages, fetchMcpToolsStdio, McpRequestError, McpProtocolError } from "./sources/mcp.js";

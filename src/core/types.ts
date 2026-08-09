@@ -11,6 +11,7 @@ export interface MCPTool {
   inputSchema?: JsonObject;
   outputSchema?: JsonObject;
   annotations?: JsonObject;
+  metadata?: JsonObject;
   [key: string]: unknown;
 }
 
@@ -20,6 +21,7 @@ export interface ToolBreakdown {
   description: number;
   inputSchema: number;
   outputSchema: number;
+  annotations: number;
   metadata: number;
 }
 
@@ -38,6 +40,7 @@ export interface AnalysisBreakdown {
   descriptions: number;
   inputSchemas: number;
   outputSchemas: number;
+  annotations: number;
   metadata: number;
 }
 
@@ -61,6 +64,7 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
   largeToolTokens: 1000,
   largeDescriptionTokens: 300,
   largeInputSchemaTokens: 500,
+  largeOutputSchemaTokens: 500,
   dominantSharePercent: 20,
   longPropertyDescriptionTokens: 50,
   concentrationSharePercent: 50,

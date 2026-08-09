@@ -9,7 +9,7 @@ const DEFAULT_MAX_TOOL_LIST_PAGES = 100;
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_ACCEPT = "application/json, text/event-stream";
 const DEFAULT_CONTENT_TYPE = "application/json";
-const DEFAULT_CLIENT_INFO = { name: "mcp-size", version: "0.3.0" };
+const DEFAULT_CLIENT_INFO = { name: "mcp-size", version: "0.4.0" };
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(["2024-11-05", "2025-01-01", "2025-03-26", "2025-06-18"]);
 
 export type RpcMessage = Record<string, unknown>;

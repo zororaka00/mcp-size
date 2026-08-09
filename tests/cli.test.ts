@@ -89,3 +89,61 @@ test("CLI forwards custom headers without printing their values", async () => {
   assert.doesNotMatch(stderr, /placeholder-value/);
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 });
+
+test("CLI diff reports added, removed, modified tools and stable component deltas", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mcp-size-diff-"));
+  const baseline = join(directory, "baseline.json");
+  const baselineSource = join(directory, "baseline-tools.json");
+  const current = join(directory, "current.json");
+  await writeFile(baselineSource, JSON.stringify([{ name: "removed", description: "old" }, { name: "changed", description: "old" }, { name: "same" }]), "utf8");
+  await writeFile(current, JSON.stringify([{ name: "added", description: "new" }, { name: "changed", description: "new", annotations: { readOnlyHint: true } }, { name: "same" }]), "utf8");
+  const baselineReport = spawnSync(process.execPath, [cli, baselineSource, "--json"], { encoding: "utf8" });
+  assert.equal(baselineReport.status, 0);
+  await writeFile(baseline, baselineReport.stdout, "utf8");
+  const json = spawnSync(process.execPath, [cli, "diff", current, "--baseline", baseline, "--json"], { encoding: "utf8" });
+  assert.equal(json.status, 0);
+  assert.equal(json.stderr, "");
+  const parsed = JSON.parse(json.stdout) as {
+    addedTools: Array<{ name: string }>;
+    removedTools: Array<{ name: string }>;
+    modifiedTools: Array<{ name: string; components: { annotations: { delta: number } } }>;
+    total: { delta: number; percentage: number };
+  };
+  assert.deepEqual(parsed.addedTools.map((tool) => tool.name), ["added"]);
+  assert.deepEqual(parsed.removedTools.map((tool) => tool.name), ["removed"]);
+  assert.deepEqual(parsed.modifiedTools.map((tool) => tool.name), ["changed"]);
+  assert.ok(parsed.modifiedTools[0]!.components.annotations.delta > 0);
+  assert.equal(typeof parsed.total.percentage, "number");
+  const repeated = spawnSync(process.execPath, [cli, "diff", current, "--baseline", baseline, "--json"], { encoding: "utf8" });
+  assert.equal(repeated.stdout, json.stdout);
+  const human = spawnSync(process.execPath, [cli, "diff", current, "--baseline", baseline], { encoding: "utf8" });
+  assert.equal(human.status, 0);
+  assert.match(human.stdout, /Added tools/);
+  assert.match(human.stdout, /changed/);
+  await rm(directory, { recursive: true, force: true });
+});
+
+test("CLI diff enforces total, per-tool, and component regressions with exit code 1", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mcp-size-diff-budget-"));
+  const baseline = join(directory, "baseline.json");
+  const baselineSource = join(directory, "baseline-tools.json");
+  const current = join(directory, "current.json");
+  await writeFile(baselineSource, JSON.stringify([{ name: "tool", description: "a" }]), "utf8");
+  await writeFile(current, JSON.stringify([{ name: "tool", description: "a".repeat(100) }]), "utf8");
+  const baselineReport = spawnSync(process.execPath, [cli, baselineSource, "--json"], { encoding: "utf8" });
+  assert.equal(baselineReport.status, 0);
+  await writeFile(baseline, baselineReport.stdout, "utf8");
+  const result = spawnSync(process.execPath, [cli, "diff", current, "--baseline", baseline, "--max-increase", "0", "--json"], { encoding: "utf8" });
+  assert.equal(result.status, 1);
+  const parsed = JSON.parse(result.stdout) as { enforcement: { exceeded: boolean; reasons: string[] } };
+  assert.equal(parsed.enforcement.exceeded, true);
+  assert.ok(parsed.enforcement.reasons.length > 0);
+  const malformed = join(directory, "malformed.json");
+  await writeFile(malformed, "{not-json", "utf8");
+  const invalid = spawnSync(process.execPath, [cli, "diff", current, "--baseline", malformed, "--json"], { encoding: "utf8" });
+  assert.equal(invalid.status, 2);
+  await writeFile(malformed, JSON.stringify({ totalTokens: "not-a-number" }), "utf8");
+  const invalidShape = spawnSync(process.execPath, [cli, "diff", current, "--baseline", malformed, "--json"], { encoding: "utf8" });
+  assert.equal(invalidShape.status, 2);
+  await rm(directory, { recursive: true, force: true });
+});

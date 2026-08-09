@@ -1,4 +1,5 @@
 import type { AnalysisResult, ToolAnalysis } from "../core/types.js";
+import type { AnalysisDiff, DiffComponent, ToolDiff } from "../core/diff.js";
 
 export type SortField = "tokens" | "name" | "description" | "inputSchema" | "outputSchema";
 
@@ -53,6 +54,7 @@ export function renderHumanReport(result: AnalysisResult, options: HumanReportOp
     ["Descriptions", result.breakdown.descriptions, result.breakdownPercentages.descriptions],
     ["Input schemas", result.breakdown.inputSchemas, result.breakdownPercentages.inputSchemas],
     ["Output schemas", result.breakdown.outputSchemas, result.breakdownPercentages.outputSchemas],
+    ["Annotations", result.breakdown.annotations, result.breakdownPercentages.annotations],
     ["Other metadata", result.breakdown.metadata, result.breakdownPercentages.metadata]
   ];
   for (const [label, tokens, share] of categories) lines.push(`${label.padEnd(20)} ${number(tokens).padStart(8)}  ${percent(share).padStart(6)}`);
@@ -73,6 +75,65 @@ export function renderHumanReport(result: AnalysisResult, options: HumanReportOp
   if (result.suggestions.length > 0) {
     lines.push("", "Suggestions");
     for (const suggestion of result.suggestions) lines.push(`- ${suggestion}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+const DIFF_LABELS: Record<DiffComponent, string> = {
+  name: "name",
+  description: "description",
+  inputSchema: "inputSchema",
+  outputSchema: "outputSchema",
+  annotations: "annotations",
+  metadata: "metadata"
+};
+
+function signed(value: number): string {
+  return value > 0 ? `+${number(value)}` : number(value);
+}
+
+function renderChanges(lines: string[], label: string, changes: ToolDiff[]): void {
+  lines.push("", label);
+  if (changes.length === 0) {
+    lines.push("- none");
+    return;
+  }
+  for (const change of changes) {
+    const name = `${change.name}${change.occurrence ? ` #${change.occurrence}` : ""}`;
+    lines.push(`- ${name}: ${signed(change.tokenDelta)} tokens (${change.tokenPercentage.toFixed(1)}%)`);
+    const deltas = Object.entries(change.components)
+      .filter(([, component]) => component.delta !== 0)
+      .map(([component, value]) => `${DIFF_LABELS[component as DiffComponent]} ${signed(value.delta)} (${value.percentage.toFixed(1)}%)`);
+    if (deltas.length > 0) lines.push(`  ${deltas.join(", ")}`);
+  }
+}
+
+export interface HumanDiffOptions {
+  baseline: string;
+  current: string;
+}
+
+export function renderHumanDiff(diff: AnalysisDiff, options: HumanDiffOptions): string {
+  const lines = [
+    "MCP Tool Size Diff",
+    "",
+    `Baseline: ${options.baseline}`,
+    `Current:  ${options.current}`,
+    `Total tokens: ${number(diff.baselineTotalTokens)} -> ${number(diff.currentTotalTokens)} (${signed(diff.totalDelta)}, ${diff.totalPercentage.toFixed(1)}%)`
+  ];
+  renderChanges(lines, "Added tools", diff.addedTools);
+  renderChanges(lines, "Removed tools", diff.removedTools);
+  renderChanges(lines, "Modified tools", diff.modifiedTools);
+  lines.push("", "Component deltas");
+  for (const component of Object.keys(diff.components) as DiffComponent[]) {
+    const value = diff.components[component];
+    lines.push(`- ${DIFF_LABELS[component]}: ${signed(value.delta)} tokens (${value.percentage.toFixed(1)}%)`);
+  }
+  if (diff.enforcement.exceeded) {
+    lines.push("", "Enforcement: exceeded");
+    for (const reason of diff.enforcement.reasons) lines.push(`- ${reason}`);
+  } else {
+    lines.push("", "Enforcement: within limits");
   }
   return `${lines.join("\n")}\n`;
 }

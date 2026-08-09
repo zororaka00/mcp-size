@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
-import { analyzeTools, fetchMcpTools, fetchMcpToolsStdio, loadToolsFromJsonFile, type AnalysisResult, type McpFetchOptions, type MCPTool } from "../index.js";
-import { renderHumanReport, sortTools, type SortField } from "./reporter.js";
+import { analyzeTools, compareAnalyses, fetchMcpTools, fetchMcpToolsStdio, loadToolsFromJsonFile, parseBaselineDocument, type AnalysisDiff, type AnalysisResult, type McpFetchOptions, type MCPTool } from "../index.js";
+import { renderHumanDiff, renderHumanReport, sortTools, type SortField } from "./reporter.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const SORT_FIELDS: SortField[] = ["tokens", "name", "description", "inputSchema", "outputSchema"];
 const VALUE_FLAGS = new Set([
   "--budget", "--top", "--sort", "--header", "--timeout-ms", "--max-response-bytes", "--max-tool-list-pages",
@@ -12,7 +12,9 @@ const VALUE_FLAGS = new Set([
 ]);
 
 interface CliOptions {
+  mode: "report" | "diff";
   source?: string;
+  diffBaseline?: string;
   json: boolean;
   budget?: number;
   top?: number;
@@ -43,6 +45,7 @@ interface CliOptions {
 
 function helpText(): string {
   return `Usage: mcp-size <file.json|http://server/mcp> [options]
+       mcp-size diff <current> --baseline <baseline.json> [options]
 
 Estimate the context size of MCP tool definitions.
 
@@ -68,7 +71,7 @@ Options:
                       Maximum local JSON/stdin input (default: 10485760)
   --baseline <file>   Compare total and per-tool tokens with a JSON report
   --max-increase <tokens>
-                      Allowed baseline increase before exit 1 (default: 0)
+                      Allowed total, per-tool, and component increase (default: 0)
   --stdio <executable>
                       Run an MCP stdio executable without a shell
   --stdio-arg <arg>   Append one argument to --stdio; repeat as needed
@@ -86,6 +89,9 @@ Options:
   --verbose           Include a stack trace on errors
   --version           Print the package version
   --help              Show this help
+
+The diff command reports added, removed, and modified tools plus total and component deltas.
+Exit codes: 0 success, 1 budget/regression exceeded, 2 invalid input or runtime error.
 
 For secrets, prefer MCP_SIZE_HEADERS (one Name:Value per line) or the library API.
 Shell history and process listings can expose values passed to --header.
@@ -139,10 +145,12 @@ function setValue(options: CliOptions, flag: string, value: string): void {
 }
 
 function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { json: false, sort: "tokens", noColor: false, verbose: false, headers: [], stdioArgs: [], help: false, version: false };
+  const options: CliOptions = { mode: "report", json: false, sort: "tokens", noColor: false, verbose: false, headers: [], stdioArgs: [], help: false, version: false };
+  const positional: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--help" || arg === "-h") options.help = true;
+    if (index === 0 && arg === "diff") options.mode = "diff";
+    else if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--version" || arg === "-v") options.version = true;
     else if (arg === "--json") options.json = true;
     else if (arg === "--no-color") options.noColor = true;
@@ -159,9 +167,21 @@ function parseArgs(argv: string[]): CliOptions {
         if (!value) throw new Error(`${flag} requires a value.`);
         setValue(options, flag, value);
       } else if (arg.startsWith("-") && arg !== "-") throw new Error(`Unknown option: ${arg}`);
-      else if (options.source === undefined) options.source = arg;
-      else throw new Error("Only one source may be provided.");
+      else positional.push(arg);
     }
+  }
+  if (options.mode === "diff") {
+    if (positional.length === 2 && !options.baseline) {
+      options.diffBaseline = positional[0];
+      options.source = positional[1];
+    } else if (positional.length === 1) {
+      options.source = positional[0];
+    } else if (positional.length > 2) {
+      throw new Error("Diff accepts a current source and baseline, either as two sources or with --baseline.");
+    }
+  } else {
+    if (positional.length > 1) throw new Error("Only one source may be provided.");
+    options.source = positional[0];
   }
   if (options.stdio && options.source) throw new Error("Use either a JSON/HTTP source or --stdio, not both.");
   return options;
@@ -192,17 +212,14 @@ async function loadSource(source: string, options: CliOptions): Promise<MCPTool[
   return loadToolsFromJsonFile(source, { maxInputBytes: options.maxInputBytes });
 }
 
-async function baselineOverage(path: string | undefined, result: AnalysisResult, allowed: number): Promise<{ totalOver: number; tools: string[] }> {
-  if (!path) return { totalOver: 0, tools: [] };
-  let baseline: unknown;
-  try { baseline = JSON.parse(await readFile(path, "utf8")); } catch { throw new Error(`Unable to read baseline JSON from ${path}.`); }
-  if (typeof baseline !== "object" || baseline === null || typeof (baseline as Record<string, unknown>).totalTokens !== "number") throw new Error(`Baseline ${path} must be a mcp-size JSON report.`);
-  const totalOver = Math.max(0, result.totalTokens - (baseline as { totalTokens: number }).totalTokens - allowed);
-  const previous = new Map<string, number>();
-  const rawTools = (baseline as Record<string, unknown>).tools;
-  if (Array.isArray(rawTools)) for (const tool of rawTools) if (typeof tool === "object" && tool !== null && typeof (tool as Record<string, unknown>).name === "string" && typeof (tool as Record<string, unknown>).tokens === "number") previous.set((tool as { name: string }).name, (tool as { tokens: number }).tokens);
-  const tools = result.tools.filter((tool) => tool.tokens - (previous.get(tool.name) ?? 0) > allowed).map((tool) => `${tool.name} increased by ${tool.tokens - (previous.get(tool.name) ?? 0)} tokens`);
-  return { totalOver, tools };
+async function loadBaseline(path: string): Promise<AnalysisResult> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(path, "utf8")) as unknown;
+  } catch {
+    throw new Error(`Unable to read baseline JSON from ${path}.`);
+  }
+  return parseBaselineDocument(value, path);
 }
 
 function jsonReport(result: AnalysisResult, displayedTools: AnalysisResult["tools"], source: string, budget: number | undefined): string {
@@ -228,17 +245,44 @@ export async function runCli(argv: string[]): Promise<number> {
     process.stdout.write(`${VERSION}\n`);
     return 0;
   }
+  if (options.mode === "diff") return runDiffCli(options);
   if (!options.source && !options.stdio) throw new Error("A JSON file path, HTTP(S) MCP server URL, or --stdio executable is required. Use --help for usage.");
   const source = options.source ?? `stdio:${options.stdio}`;
   const tools = await loadSource(source, options);
   const result = analyzeTools(tools);
   const displayedTools = sortTools(result.tools, options.sort).slice(0, options.top);
-  const baseline = await baselineOverage(options.baseline, result, options.maxIncrease ?? 0);
-  const exceeded = (options.budget !== undefined && result.totalTokens > options.budget) || baseline.totalOver > 0 || baseline.tools.length > 0;
+  const baselineResult = options.baseline ? await loadBaseline(options.baseline) : undefined;
+  const baselineDiff = baselineResult ? compareAnalyses(baselineResult, result, { allowedIncrease: options.maxIncrease ?? 0 }) : undefined;
+  const baseline = baselineDiff ? {
+    totalOver: Math.max(0, baselineDiff.totalDelta - (options.maxIncrease ?? 0)),
+    tools: baselineDiff.enforcement.reasons,
+    diff: baselineDiff
+  } : { totalOver: 0, tools: [] };
+  const exceeded = (options.budget !== undefined && result.totalTokens > options.budget) || Boolean(baselineDiff?.enforcement.exceeded);
   if (options.json) process.stdout.write(`${JSON.stringify({ ...JSON.parse(jsonReport(result, displayedTools, source, options.budget)), baseline })}\n`);
   else process.stdout.write(renderHumanReport(result, { source, tools: displayedTools, budget: options.budget }));
   if (exceeded && (baseline.totalOver > 0 || baseline.tools.length > 0) && !options.json) process.stderr.write(`Baseline regression: ${baseline.totalOver > 0 ? `${baseline.totalOver} total tokens over allowance` : ""}${baseline.tools.length ? `; ${baseline.tools.join("; ")}` : ""}.\n`);
   return exceeded ? 1 : 0;
+}
+
+async function runDiffCli(options: CliOptions): Promise<number> {
+  const baselinePath = options.baseline ?? options.diffBaseline;
+  if (!baselinePath) throw new Error("The diff command requires --baseline <file> or two positional sources.");
+  if (!options.source && !options.stdio) throw new Error("The diff command requires a current JSON file, HTTP(S) MCP server URL, or --stdio executable.");
+  const source = options.source ?? `stdio:${options.stdio}`;
+  const [tools, baseline] = await Promise.all([loadSource(source, options), loadBaseline(baselinePath)]);
+  const result = analyzeTools(tools);
+  const diff: AnalysisDiff = compareAnalyses(baseline, result, {
+    allowedIncrease: options.maxIncrease ?? 0,
+    budget: options.budget,
+    enforce: options.maxIncrease !== undefined || options.budget !== undefined
+  });
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify({ baseline: baselinePath, current: source, budget: options.budget, ...diff })}\n`);
+  } else {
+    process.stdout.write(renderHumanDiff(diff, { baseline: baselinePath, current: source }));
+  }
+  return diff.enforcement.exceeded ? 1 : 0;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
